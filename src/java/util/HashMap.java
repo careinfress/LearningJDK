@@ -413,10 +413,14 @@ public class HashMap<K,V>
      *	       <tt>null</tt> with the specified key.
      */
     public V put(K key, V value) {
-	if (key == null)
-	    return putForNullKey(value);
+        // hashMap 可以存放 Key 为 null 的值
+        if (key == null) {
+            return putForNullKey(value);
+        }
+
         int hash = hash(key.hashCode());
         int i = indexFor(hash, table.length);
+        // 由于要返回旧值，所以这个地方需要遍历该数组节点的链表，如果 Key 相同，则替换值然后返回
         for (Entry<K,V> e = table[i]; e != null; e = e.next) {
             Object k;
             if (e.hash == hash && ((k = e.key) == key || key.equals(k))) {
