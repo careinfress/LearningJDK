@@ -117,11 +117,11 @@ abstract class Striped64 extends Number {
      * contention levels will recur, so the cells will eventually be
      * needed again; and for short-lived ones, it does not matter.
      */
-    
+
     /** Number of CPUS, to place bound on table size */
     // 虚拟机可用的处理器数量
     static final int NCPU = Runtime.getRuntime().availableProcessors();
-    
+
     /**
      * Table of cells. When non-null, size is a power of 2.
      */
@@ -130,14 +130,14 @@ abstract class Striped64 extends Number {
      * 最后获取总值时，要考虑此处的系数
      */
     transient volatile Cell[] cells;
-    
+
     /**
      * Base value, used mainly when there is no contention, but also as
      * a fallback during table initialization races. Updated via CAS.
      */
     // 当前对象的基值（获取总值时，还要考虑cells中的【操作系数】）
     transient volatile long base;
-    
+
     /**
      * Spinlock (locked via CAS) used when resizing and/or creating Cells.
      */
@@ -234,36 +234,53 @@ abstract class Striped64 extends Number {
         int h;
         
         // 获取当前线程的探测值（必须先确保当前线程的探测值有效）
-        if((h = getProbe()) == 0) {
+        if ((h = getProbe()) == 0) {
+            // 给当前线程分配hash值
             ThreadLocalRandom.current(); // force initialization
+            // 取出当前线程的hash值，赋值给h
             h = getProbe();
+            // uncontended = true 未竞争
+            // 为什么要重新设置为 true呢？因为当前线程肯定是因为写入到 cells[0] 位置
+            // 不把它当做一次真正的竞争
             wasUncontended = true;
         }
-        
+        // 表示扩容意向，false 一定不会扩容
+        // true:表示可能会扩容
         boolean collide = false;                // True if last slot nonempty
         
-        for(; ; ) {
-            Cell[] cs;
-            Cell c;
-            int n;
-            long v;
+        for (; ; ) {
+            Cell[] cs;// cs 表示 Cells 引用
+            Cell c; // c 表示当前线程命中的Cell
+            int n; // 表示 cells 的长度
+            long v; // 表示期望值
             
-            // 如果cells已经存在
-            if((cs = cells) != null && (n = cs.length)>0) {
+            // 如果 cells 已经存在，当前线程应该将数据写入到对应的 cell 中
+            if ((cs = cells) != null && (n = cs.length) > 0) {
+                // 走到这里来的条件
+                // 1. 如果当前线程关联的cell为null
+                // 2. 如果当前线程关联的cell有竞争
+
                 // 如果当前线程关联的cell为null，尝试为其创造一个新的cell
-                if((c = cs[(n - 1) & h]) == null) {
+                if ((c = cs[(n - 1) & h]) == null) {
                     // Try to attach new Cell
-                    if(cellsBusy == 0) {
+                    if (cellsBusy == 0) {
                         // Optimistically create
                         Cell r = new Cell(x);
                         // 获取cells的控制权
-                        if(cellsBusy == 0 && casCellsBusy()) {
+                        if (cellsBusy == 0 && casCellsBusy()) {
                             try {               // Recheck under lock
-                                Cell[] rs;
-                                int m, j;
-                                // 存在有效的cells，且当前线程关联的cell为null，则为该cell赋值
-                                if((rs = cells) != null
-                                    && (m = rs.length)>0
+                                Cell[] rs;// 表示 cells 引用
+                                int m, j; // m 表示cells长度 j表示当前线程命中的下标
+                                // 存在有效的 cells，且当前线程关联的cell为null，则为该cell赋值
+
+                                // 条件1跟条件2恒成立
+                                // 条件3的判断是为了避免在多线程并发时
+                                // A 线程 cellsBusy == 0 之后就释放了 CPU
+                                // B 线程 cellsBusy == 0 && casCellsBusy() 之后顺便把下面所有的操作都做了
+                                // 并且还释放了锁，这个时候 A 线程拿到锁了，那么如果不加 rs[j = (m - 1) & h] == null 这个判断的话
+                                // A 线程就会把 B 线程刚刚初始化的值给丢弃了
+                                if ((rs = cells) != null
+                                    && (m = rs.length) > 0
                                     && rs[j = (m - 1) & h] == null) {
                                     rs[j] = r;
                                     break;
@@ -275,29 +292,46 @@ abstract class Striped64 extends Number {
                         }
                     }
                     collide = false;
-                    
-                    // 如果当前线程关联的cell不为null，但是上次更新【操作系数】时失败了，说明此该cell被争用，需要更新一下探测值重新找一个cell
-                } else if(!wasUncontended) {    // CAS already known to fail
+                }
+
+                // 如果当前线程关联的cell不为null，但是上次更新【操作系数】时失败了，
+                // 说明此该cell被争用，需要更新一下探测值重新找一个cell
+
+                // 只有一种情况，wasUncontended 为 false
+                // cells 初始化后，然后当前 cell 有竞争
+                // 如果当前线程关联的cell不为null，尝试更新其【操作系数】
+                else if(!wasUncontended) {      // CAS already known to fail
                     wasUncontended = true;      // Continue after rehash
-                    
-                    // 如果当前线程关联的cell不为null，尝试更新其【操作系数】（wasUncontended已经为true）
-                } else if(c.cas(v = c.value, (fn == null) ? v + x : fn.applyAsLong(v, x))) {
+                }
+
+                // 当前线程 rehash 过，然后新命中的 cell 不为空
+                // true 如果写成功了。退出就行
+                // false 表示 rehash 之后命中的新的 cell 还是有竞争
+                else if (c.cas(v = c.value, (fn == null) ? v + x : fn.applyAsLong(v, x))) {
                     break;
-                    
-                    // 如果cell的数量已经超过了虚拟机可用的处理器数量，或者，cells被别的线程扩容了，则不需要纠结碰撞的问题
-                } else if(n >= NCPU || cells != cs) {
-                    // 重置collide为false，表示当前没有发生碰撞
+                }
+
+                // 如果cell的数量已经超过了虚拟机可用的处理器数量，表示不扩容了
+                // cells被别的线程扩容了，则不需要纠结碰撞的问题
+                else if (n >= NCPU || cells != cs) {
+                    // 重置 collide 为 false，表示当前没有发生碰撞
                     collide = false;            // At max size or stale
-                    
-                    // 此时发生了碰撞，需要更新collide为true，下一轮进来可能要扩容
-                } else if(!collide) {
+                }
+
+                // 此时发生了碰撞，需要更新 collide 为 true，下一轮进来可能要扩容
+                else if (!collide) {
+                    // 设置扩容意向为 true
                     collide = true;
-                    
-                    // 获取cells的控制权，并着手扩容
-                } else if(cellsBusy == 0 && casCellsBusy()) {
+                }
+
+                // 获取cells的控制权，并着手扩容
+                // cellsBusy == 0 表示 cells 为无锁状态
+                // casCellsBusy 竞争这把锁，如果为 false 表示有线程在竞争这把锁
+                else if (cellsBusy == 0 && casCellsBusy()) {
                     try {
                         // Expand table unless stale
-                        if(cells == cs) {
+                        // 还是按照老思路去分析就行
+                        if (cells == cs) {
                             // 发生碰撞后，又进行了一次赋值尝试，但是失败了，说明cells争用严重，需要扩容
                             cells = Arrays.copyOf(cs, n << 1);
                         }
@@ -315,13 +349,22 @@ abstract class Striped64 extends Number {
                 
                 // 更新当前线程内的探测值，并返回更新后的值
                 h = advanceProbe(h);
-                
-                // 如果cells不存在，且获取到cells的操作权
-            } else if(cellsBusy == 0 && cells == cs && casCellsBusy()) {
+            }
+
+            // 前置条件：cells还未初始化 as为 null
+            // 条件1：true 表示未加锁
+            // 条件2：cells == cs ？因为其他线程可能会在你给 cs 赋值的之后修改了 cells
+            // 条件2：true 表示获取锁成功，会把 cellsBusy = 1
+            else if(cellsBusy == 0 && cells == cs && casCellsBusy()) {
                 // Initialize table
                 try {
                     // 初始化cells，并向某个cell中存入【操作系数】
-                    if(cells == cs) {
+                    // 这个地方为什么还要再判断一次？
+                    // 一个线程在执行完 cellsBusy == 0 && cells == cs 之后就释放完 CPU 了
+                    // 这个时候另外一个线程也行完 cellsBusy == 0 && cells == cs && casCellsBusy()
+                    // 然后把 cells 改了然后把锁都释放了，这个时候前一个线程获取到 CPU 了
+                    // 它也能获取到锁，然后把前一个线程的修改给覆盖了。
+                    if (cells == cs) {
                         Cell[] rs = new Cell[2];
                         rs[h & 1] = new Cell(x);
                         cells = rs;
@@ -331,12 +374,11 @@ abstract class Striped64 extends Number {
                     // 释放cells的控制权
                     cellsBusy = 0;
                 }
-                
-                /*
-                 * 如果cells不存在，且无法获取到cells的操作权（被别的线程抢走了控制权）
-                 * 则尝试在base上做更新，如果尝试成功，则结束目标操作，否则，重新执行上面的for循环
-                 */
-            } else if(casBase(v = base, (fn == null) ? v + x : fn.applyAsLong(v, x))) { // Fall back on using base
+            }
+
+            // 如果 cells 不存在，且无法获取到 cells 的操作权（被别的线程抢走了控制权）
+            // 则尝试在 base 上做更新，如果尝试成功，则结束目标操作，否则，重新执行上面的 for 循环
+            else if(casBase(v = base, (fn == null) ? v + x : fn.applyAsLong(v, x))) {
                 break;
             }
         }

@@ -98,21 +98,43 @@ public class LongAdder extends Striped64 implements Serializable {
      */
     // 在当前值的基础上增加x（x可以为负数）
     public void add(long x) {
+        // as 表示cells引用
+        // b 表示获取的 base 值
+        // v 表示 期望值
+        // m 表示 cells 数组的长度
+        // c 表示当前线程命中的 cell 单元格
         Cell[] cs;
         long b, v;
         int m;
         Cell c;
-        
+        // 条件1：true 表示cells已经初始化过了，当前线程应该将数据写入到对应的 cell中
+        // 		 false 表示 cells 未初始化，当前所有线程应该将数据写入到base中
+        // 条件2  true 表示当前线程 cas 替换数据成功
+        //       false 表示发生竞争了，可能需要重试或者扩容
         if((cs = cells) != null // 如果cells已经存在，则尝试更新cell
             || !casBase(b = base, b + x)) { // 如果cells不存在，则尝试更新基值
             
             /* 至此，说明cells存在，或者cells不存在，且基值更新失败 */
-            
+            // uncontended = true 未竞争
+            // uncontended = false 发生竞争
             boolean uncontended = true;
-            if(cs == null   // cells不存在，且基值更新失败
-                || (m = cs.length - 1)<0    // cells存在但无效（长度为0）
+
+            // 条件1  true  说明 cells 未初始化，也就是多线程写 base 发生竞争
+            //       false 说明 cells 已经初始化，当前线程应该找自己的cell写值
+            // 条件2  getProbe() 获取当前线程的 hash 值 m 表示 (cells 长度 - 1) 一定是2的次方数
+            //       true  说明当前线程对应下标的 cell 为空，需要创建
+            //       false 说明当前线程对应的 cell 不为空，下一步想要将x值添加到 cell 中
+            // 条件3  true  表示 cas 失败，意味着当前线程对应的cell有竞争
+            // 		 false 表示 cas 成功
+
+            if (cs == null   // cells不存在，且基值更新失败
+                || (m = cs.length - 1) < 0    // cells存在但无效（长度为0）
                 || (c = cs[getProbe() & m]) == null // cells存在且有效，且当前线程关联的cell为null（很可能是探测值无效引起的）
                 || !(uncontended = c.cas(v = c.value, v + x))) { // cells存在且有效，且当前线程关联着非空cell，则尝试更新该cell内的【操作系数】
+
+                // 说明 cells 未初始化，也就是多线程写 base 发生竞争
+                // 说明当前线程对应下标的 cell 为空，需要创建
+                // 表示 cas 失败，意味着当前线程对应的cell有竞争
                 longAccumulate(x, null, uncontended);
             }
         }
