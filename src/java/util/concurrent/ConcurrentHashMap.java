@@ -507,12 +507,15 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * The default concurrency level for this table.
      * Unused but defined for compatibility with previous versions of this class.
      */
+    // jdk1.7遗留下来的，用来表示并发级别的属性
+    // jdk1.8只有在初始化的时候用到，不再表示并发级别了~ 1.8以后并发级别由散列表长度决定
     private static final int DEFAULT_CONCURRENCY_LEVEL = 16;    // 默认并发级别，未使用，只是为与该类的先前版本兼容
     
     /**
      * The largest possible (non-power of two) array size.
      * Needed by toArray and related methods.
      */
+    // 最大的数组大小（非2的幂） toArray和相关方法需要(并不是核心属性)
     static final int MAX_ARRAY_SIZE = Integer.MAX_VALUE - 8;    // 哈希数组最大容量(用于toArray中的阈值判断)
     
     /**
@@ -522,6 +525,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * because the top two bits of 32bit hash fields are used for
      * control purposes.
      */
+    // 散列表数组最大容量值
     private static final int MAXIMUM_CAPACITY = 1 << 30;        // 哈希数组最大容量
     
     /**
@@ -537,6 +541,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * simpler to use expressions such as {@code n - (n >>> 2)} for
      * the associated resizing threshold.
      */
+    // 负载因子：表示散列表的填满程度~ 在ConcurrentHashMap中，该属性是固定值0.75，不可修改~
     private static final float LOAD_FACTOR = 0.75f;     // ConcurrentHashMap默认装载因子（负荷系数）
     
     /**
@@ -547,6 +552,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * tree removal about conversion back to plain bins upon
      * shrinkage.
      */
+    // 树化阈值：散列表的一个桶中链表长度达到8时候，可能发生链表树化
     static final int TREEIFY_THRESHOLD = 8;     // 某个哈希槽（链）上的元素数量增加到此值后，这些元素进入波动期，即将从链表转换为红黑树
     
     /**
@@ -555,6 +561,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * The value should be at least 4 * TREEIFY_THRESHOLD to avoid
      * conflicts between resizing and treeification thresholds.
      */
+    // 散列表长度达到64，且某个桶位中的链表长度达到8，才会发生树化
     static final int MIN_TREEIFY_CAPACITY = 64; // 哈希数组的容量至少增加到此值，且满足TREEIFY_THRESHOLD的要求时，将链表转换为红黑树
     
     /**
@@ -562,6 +569,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * resize operation. Should be less than TREEIFY_THRESHOLD, and at
      * most 6 to mesh with shrinkage detection under removal.
      */
+    // 反树化阈值：散列表的一个桶中的红黑树元素个数小于6时候，将红黑树转换回链表结构
     static final int UNTREEIFY_THRESHOLD = 6;   // 哈希槽（链）上的红黑树上的元素数量减少到此值时，将红黑树转换为链表
     
     /**
@@ -571,31 +579,41 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * excessive memory contention.  The value should be at least
      * DEFAULT_CAPACITY.
      */
+    // 控制线程迁移数据的最小步长(桶位的跨度~)
     private static final int MIN_TRANSFER_STRIDE = 16;
     
     /**
      * The number of bits used for generation stamp in sizeCtl.
      * Must be at least 6 for 32bit arrays.
      */
+    // 固定值16，与扩容相关，计算扩容时会根据该属性值生成一个扩容标识戳
     private static final int RESIZE_STAMP_BITS = 16;
     
     /**
      * The maximum number of threads that can help resize.
      * Must fit in 32 - RESIZE_STAMP_BITS bits.
      */
+    // (1 << (32 - RESIZE_STAMP_BITS)) - 1 = 65535：1 << 16 -1
+    // 表示并发扩容最多容纳的线程数
     private static final int MAX_RESIZERS = (1 << (32 - RESIZE_STAMP_BITS)) - 1;
     
     /**
      * The bit shift for recording size stamp in sizeCtl.
      */
+    // 也是扩容相关属性，在扩容分析的时候会用到~
     private static final int RESIZE_STAMP_SHIFT = 32 - RESIZE_STAMP_BITS;
     
     /*
      * Encodings for Node hash fields. See above for explanation.
      */
+    // 当node节点的hash值为-1：表示当前节点是FWD(forwarding)节点(已经被迁移的节点)
     static final int MOVED     = -1; // hash for forwarding nodes       // 前向结点
+    // 当node节点的hash值为-2：表示当前节点已经树化，且当前节点为TreeBin对象~，TreeBin对象代理操作红黑树
     static final int TREEBIN   = -2; // hash for roots of trees         // 红黑树(头结点)
+    // 当node节点的hash值为-3：
     static final int RESERVED  = -3; // hash for transient reservations // 占位结点
+    // 0x7fffffff 十六进制转二进制值为：1111111111111111111111111111111（31个1）
+    // 作用是将一个二进制负数与1111111111111111111111111111111 进行按位与(&)运算时，会得到一个正数，但不是取绝对值
     static final int HASH_BITS = 0x7fffffff; // usable bits of normal node hash
     
     /** Number of CPUS, to place bounds on some sizings */
@@ -609,11 +627,13 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * The array of bins. Lazily initialized upon first insertion.
      * Size is always a power of two. Accessed directly by iterators.
      */
+    // 散列表table
     transient volatile Node<K,V>[] table;   // 哈希数组（注：哈希数组的容量跟ConcurrentHashMap可以存储的元素数量不是一回事）
     
     /**
      * The next table to use; non-null only while resizing.
      */
+    // 新表的引用：扩容过程中，会将扩容中的新table赋值给nextTable，（保持引用），扩容结束之后，这里就会被设置为NULL
     private transient volatile Node<K,V>[] nextTable;   // 哈希数组扩容时使用的新数组
     
     /**
@@ -621,6 +641,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * but also as a fallback during table initialization
      * races. Updated via CAS.
      */
+    // 与LongAdder中的baseCount作用相同: 当未发生线程竞争或当前LongAdder处于加锁状态时，增量会被累加到baseCount
     private transient volatile long baseCount;
     
     /**
@@ -630,26 +651,36 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * Otherwise, when table is null, holds the initial table size to use upon creation, or 0 for default.
      * After initialization, holds the next element count value upon which to resize the table.
      */
-    /*
-     * 当哈希数组还未创建时，sizeCtl代表预设容量，可由初始容量计算而来，参见构造器中的计算方式
-     * 如果sizeCtl的值为-1，则代表当前Map正在初始化哈希数组
-     * 当哈希数组已创建后，sizeCtl代表扩容阈值，通常是0.75*容量
-     */
+    // 表示散列表table的状态:
+    // sizeCtl<0时：
+    // 情况一、sizeCtl=-1: 表示当前table正在进行初始化(即，有线程在创建table数组)，当前线程需要自旋等待...
+    // 情况二、表示当前table散列表正在进行扩容，高16位表示扩容的标识戳，低16位表示扩容线程数：(1 + nThread) 即，当前参与并发扩容的线程数量。
+    // sizeCtl=0时：表示创建table散列表时，使用默认初始容量DEFAULT_CAPACITY=16
+    // sizeCtl>0时：
+    // 情况一、如果table未初始化，表示初始化大小
+    // 情况二、如果table已经初始化，表示下次扩容时，触发条件(阈值)
     private transient volatile int sizeCtl;
     
     /**
      * The next table index (plus one) to split while resizing.
      */
+    // 扩容过程中，记录当前进度。所有的线程都需要从transferIndex中分配区间任务，并去执行自己的任务
     private transient volatile int transferIndex;
     
     /**
      * Spinlock (locked via CAS) used when resizing and/or creating CounterCells.
      */
+    // LongAdder中，cellsBusy表示对象的加锁状态：
+    // 0: 表示当前LongAdder对象处于无锁状态
+    // 1: 表示当前LongAdder对象处于加锁状态
     private transient volatile int cellsBusy;
     
     /**
      * Table of counter cells. When non-null, size is a power of 2.
      */
+    // LongAdder中的cells数组，当baseCount发生线程竞争后，会创建cells数组，
+    // 线程会通过计算hash值，去取到自己的cell，将增量累加到指定的cell中
+    // 总数 = sum(cells) + baseCount
     private transient volatile CounterCell[] counterCells;
     
     // views
@@ -660,12 +691,19 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
     
     // Unsafe mechanics
     private static final Unsafe U = Unsafe.getUnsafe();
+    // 表示sizeCtl属性在ConcurrentHashMap中内存的偏移地址
     private static final long SIZECTL;
+    // 表示transferIndex属性在ConcurrentHashMap中内存的偏移地址
     private static final long TRANSFERINDEX;
+    // 表示transferIndex属性在ConcurrentHashMap中内存的偏移地址
     private static final long BASECOUNT;
+    // 表示cellsBusy属性在ConcurrentHashMap中内存的偏移地址
     private static final long CELLSBUSY;
+    // 表示cellsValue属性在ConcurrentHashMap中内存的偏移地址
     private static final long CELLVALUE;
+    // 表示数组第一个元素的偏移地址
     private static final int ABASE;
+    // 该属性用于数组寻址，请继续往下阅读
     private static final int ASHIFT;
     static {
         SIZECTL = U.objectFieldOffset(ConcurrentHashMap.class, "sizeCtl");
@@ -678,12 +716,21 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
         ABASE = U.arrayBaseOffset(Node[].class);
         
         // Node数组每个元素所占字节数（必须为2的冪）
+        // 表示数组中每一个单元所占用的空间大小，即scale表示Node[]数组中每一个单元所占用的空间
         int scale = U.arrayIndexScale(Node[].class);
-        if((scale & (scale - 1)) != 0) {
+        // (scale & (scale - 1)) != 0：判断scale的数值是否是2的次幂数
+        // java语言规范中，要求数组中计算出的scale必须为2的次幂数
+        // 1 0000 % 0 1111 = 0
+        if ((scale & (scale - 1)) != 0) {
             throw new ExceptionInInitializerError("array index scale not a power of two");
         }
         
         // 计算log2(scale)，并向下取整
+        // numberOfLeadingZeros(scale) 根据scale，返回当前数值转换为二进制后，从高位到地位开始统计，统计有多少个0连续在一块：eg, 8转换二进制=>1000 则 numberOfLeadingZeros(8)的结果就是28，为什么呢？因为Integer是32位，1000占4位，那么前面就有32-4个0，即连续最长的0的个数为28个
+        // 4转换二进制=>100 则 numberOfLeadingZeros(8)的结果就是29
+        // ASHIFT = 31 - Integer.numberOfLeadingZeros(4) = 2 那么ASHIFT的作用是什么呢？其实它有数组寻址的一个作用：
+        // 拿到下标为5的Node[]数组元素的偏移地址(存储地址)：假设此时 根据scale计算得到的ASHIFT = 2
+        // ABASE + (5 << ASHIFT) == ABASE + (5 << 2) == ABASE + 5 * scale，就得到了下标为5的数组元素的偏移地址
         ASHIFT = 31 - Integer.numberOfLeadingZeros(scale);
         
         // Reduce the risk of rare disastrous classloading in first call to
@@ -3062,7 +3109,19 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * to incorporate impact of the highest bits that would otherwise
      * never be used in index calculations because of table bounds.
      */
-    // 哈希算法
+    /**
+     * 计算Node节点hash值的算法：参数h为hash值
+     * eg:
+     * h二进制为 --> 	 		 		    1100 0011 1010 0101 0001 1100 0001 1110
+     * (h >>> 16) -->  					0000 0000 0000 0000 1100 0011 1010 0101
+     * (h ^ (h >>> 16)) -->				1100 0011 1010 0101 1101 1111 1011 1011
+     * 注：(h ^ (h >>> 16)) 目的是让h的高16位也参与寻址计算，使得到的hash值更分散，减少hash冲突产生~
+     * ------------------------------------------------------------------------------
+     * HASH_BITS -->					0111 1111 1111 1111 1111 1111 1111 1111
+     * (h ^ (h >>> 16)) -->				1100 0011 1010 0101 1101 1111 1011 1011
+     * (h ^ (h >>> 16)) & HASH_BITS --> 0100 0011 1010 0101 1101 1111 1011 1011
+     * 注： (h ^ (h >>> 16))得到的结果再& HASH_BITS，目的是为了让得到的hash值结果始终是一个正数
+     */
     static final int spread(int h) {
         return (h ^ (h >>> 16)) & HASH_BITS;
     }
@@ -3075,6 +3134,16 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * 根据预期的容量cap计算出ConcurrentHashMap中的哈希数组实际需要分配的容量
      * 如果输入值是2的冪，则原样返回，如果不是2的冪，则向上取就近的冪
      * 比如输入13，返回16，输入17，返回32
+     */
+    /**
+     * 根据c,计算得到大于等于c的，最小2的次幂数，该方法在HashMap源码中分析过~
+     * eg：c = 28 ，则计算得到的返回结果为 32
+     * c = 28 ==> n=27 => 0b 11011
+     *
+     * 11011 | 01101 => 11111 ---- n |= n >>> 1
+     * 11111 | 00111 => 11111 ---- n |= n >>> 2
+     * ....
+     * => 11111 + 1 = 100000 = 32
      */
     private static final int tableSizeFor(int cap) {
         int n = -1 >>> Integer.numberOfLeadingZeros(cap - 1);
@@ -3135,8 +3204,12 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * Note that calls to setTabAt always occur within locked regions,
      * and so require only release ordering.
      */
-    
-    // 获取tab[i]
+
+    /**
+     * 获取 tab(Node[]) 数组指定下标 i 的Node节点
+     * Node<K,V>[] tab：表示Node[]数组
+     * int i：表示数组下标
+     */
     @SuppressWarnings("unchecked")
     static final <K, V> Node<K, V> tabAt(Node<K, V>[] tab, int i) {
         // 计算下标i的元素在底层的偏移地址
@@ -3145,20 +3218,35 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
         // 获取对象tab中offset地址处对应的引用类型字段的值
         return (Node<K, V>) U.getObjectAcquire(tab, offset);
     }
-    
-    // 原子地更新tab[i]为node
+
+    /**
+     * 通过CAS的方式去向Node数组指定位置i设置节点值，设置成功返回true，否则返回false
+     * Node<K,V>[] tab：表示Node[]数组
+     * int i：表示数组下标
+     * Node<K,V> c：期望节点值
+     * Node<K,V> v：要设置的节点值
+     */
     static final <K, V> boolean casTabAt(Node<K, V>[] tab, int i, Node<K, V> expected, Node<K, V> node) {
         // 计算下标i的元素在底层的偏移地址
         long offset = ((long) i << ASHIFT) + ABASE;
-        
+        // 调用Unsafe的比较并交换去设置Node[]数组指定位置的节点值，参数如下：
+        // tab：Node[]数组
+        // ((long)i << ASHIFT) + ABASE：下标为i数组桶的偏移地址
+        // c：期望节点值
+        // v：要设置的节点值
         return U.compareAndSetObject(tab, offset, expected, node);
     }
-    
-    // 设置tab[i]为x
+
+    /**
+     * 根据数组下标i，设置Node[]数组指定下标位置的节点值：
+     * Node<K,V>[] tab：表示Node[]数组
+     * int i：表示数组下标
+     * Node<K,V> v：要设置的节点值
+     */
     static final <K, V> void setTabAt(Node<K, V>[] tab, int i, Node<K, V> x) {
         // 计算下标i的元素在底层的偏移地址
         long offset = ((long) i << ASHIFT) + ABASE;
-        
+        // ((long)i << ASHIFT) + ABASE：下标为i数组桶的偏移地址
         U.putObjectRelease(tab, offset, x);
     }
     
@@ -3605,7 +3693,33 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * Returns the stamp bits for resizing a table of size n.
      * Must be negative when shifted left by RESIZE_STAMP_SHIFT.
      */
+    /**
+     * table数组扩容时，计算出一个扩容标识戳，当需要并发扩容时，当前线程必须拿到扩容标识戳才能参与扩容：
+     */
     static final int resizeStamp(int n) {
+        /**
+         * 举例子分析一下：
+         * 当我们需要table容量从16 库容到32时：Integer.numberOfLeadingZeros(16) 会得到 27，怎么得来的呢？
+         * numberOfLeadingZeros(n) 根据传入的n，返回当前数值转换为二进制后，从高位到地位开始统计，统计有多少个0连续在一块：
+         * eg：16 转换二进制 => 1 0000 则 numberOfLeadingZeros(16)的结果就是 27，因为Integer是32位，1 0000占5位，那么前面就有(32 - 5)个0，即连续最长的0的个数为27个。
+         * (1 << (RESIZE_STAMP_BITS - 1))：其中RESIZE_STAMP_BITS是一个固定值16
+         *
+         * 下面就来计算一下：
+         * // 从16扩容到32
+         * 16 -> 32
+         * // 用A表示：
+         * numberOfLeadingZeros(16) => 1 0000 => 27 => 0000 0000 0001 1011
+         * // 用B表示：
+         * (1 << (RESIZE_STAMP_BITS - 1)) => (1 << (16 - 1) => 1000 0000 0000 0000 => 32768
+         *
+         * // A | B
+         * Integer.numberOfLeadingZeros(n) | (1 << (RESIZE_STAMP_BITS - 1))
+         * -----------------------------------------------------------------
+         * 0000 0000 0001 1011  ---> A
+         * 1000 0000 0000 0000  ---> B
+         * -------------------  ---> | 按位或
+         * 1000 0000 0001 1011  ---> 计算得到扩容标识戳
+         */
         return Integer.numberOfLeadingZeros(n) | (1 << (RESIZE_STAMP_BITS - 1));
     }
     
@@ -4532,9 +4646,13 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      */
     // ConcurrentHashMap中的普通结点信息，每个Node代表一个元素，里面包含了key和value的信息
     static class Node<K, V> implements Map.Entry<K, V> {
+        // hash值
         final int hash;
+        // key
         final K key;
+        // value
         volatile V val;
+        // 后驱节点
         volatile Node<K, V> next;
         
         Node(int hash, K key, V val) {
@@ -4596,12 +4714,15 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      */
     // ConcurrentHashMap中的红黑树结点
     static final class TreeNode<K, V> extends Node<K, V> {
+        // 父节点
         TreeNode<K, V> parent;  // red-black tree links
+        // 左子节点
         TreeNode<K, V> left;
+        // 右节点
         TreeNode<K, V> right;
-        
+        // 节点有红、黑两种颜色~
         boolean red;
-        
+        // 前驱节点
         TreeNode<K, V> prev;    // needed to unlink next upon deletion
         
         
@@ -4661,7 +4782,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * forcing writers (who hold bin lock) to wait for readers (who do
      * not) to complete before tree restructuring operations.
      */
-    // 红黑树(头结点)
+    // 红黑树(红黑树代理结点)
     static final class TreeBin<K, V> extends Node<K, V> {
         // values for lockState
         static final int WRITER = 1; // set while holding write lock
@@ -5309,13 +5430,14 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      */
     // 前向结点，应用在数据迁移中。比如Map在扩容时，会将新容器包裹在前向结点中，扩容完毕之后，则撤销该前向结点
     static final class ForwardingNode<K, V> extends Node<K, V> {
+        // nextTable表示新散列表的引用
         final Node<K, V>[] nextTable;
         
         ForwardingNode(Node<K, V>[] tab) {
             super(MOVED, null, null);
             this.nextTable = tab;
         }
-        
+        // 到新表上去读数据
         Node<K, V> find(int h, Object k) {
             // loop to avoid arbitrarily deep recursion on forwarding nodes
 outer:
@@ -5355,7 +5477,7 @@ outer:
     /**
      * A place-holder node used in computeIfAbsent and compute.
      */
-    // 占位结点
+    // 占位结点解决 computeIfAbsent bug
     static final class ReservationNode<K, V> extends Node<K, V> {
         ReservationNode() {
             super(RESERVED, null, null);
