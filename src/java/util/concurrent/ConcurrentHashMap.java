@@ -903,24 +903,54 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      */
     // 根据指定的key获取对应的value，如果不存在，则返回null
     public V get(Object key) {
-        Node<K, V>[] tab;
-        Node<K, V> e, p;
-        int n, eh;
-        K ek;
-        
+        Node<K, V>[] tab; // tab 引用map.table
+        Node<K, V> e;     // e 当前元素(用于循环遍历)
+        Node<K, V> p;     // p 目标节点
+        int n, eh;  // n table数组长度 // eh 当前元素hash
+        K ek; // ek 当前元素key
+
+        // 根据key.hashCode()计算hash: 扰动运算后得到得到更散列的hash值
         int h = spread(key.hashCode());
-        
-        if((tab = table) != null && (n = tab.length)>0 && (e = tabAt(tab, (n - 1) & h)) != null) {
-            if((eh = e.hash) == h) {
-                if((ek = e.key) == key || (ek != null && key.equals(ek))) {
+        // --------------------------------------------------------------------------------
+        // CASE1:
+        // 如果元素所在的桶存在且里面有元素
+        // 条件一：(tab = table) != null
+        // 		true -> 表示已经put过数据，并且map内部的table也已经初始化完毕
+        // 		false -> 表示创建完map后，并没有put过数据，map内部的table是延迟初始化的，只有第一次写数据时会触发初始化创建table逻辑
+        // 条件二：(n = tab.length) > 0 如果为 true-> 表示table已经初始化
+        // 条件三：(e = tabAt(tab, (n - 1) & h)) != null
+        // 		true -> 当前key寻址的桶位有值
+        // 		false -> 当前key寻址的桶位中是null，是null直接返回null
+        if ((tab = table) != null
+                && (n = tab.length) > 0
+                && (e = tabAt(tab, (n - 1) & h)) != null) {
+            // 进入if代码块内部的前置条件：当前桶位有数据
+
+            // 如果第一个元素就是要找的元素，则直接返回
+            // 对比头结点hash与查询key的hash是否一致
+            // 条件成立：说明头结点与查询Key的hash值完全一致
+            if ((eh = e.hash) == h) {
+                // 完全比对 查询key 和 头结点的key
+                // 条件成立：说明头结点就是查询数据
+                if ((ek = e.key) == key
+                        || (ek != null && key.equals(ek))) {
+                    // 当e的hash值以及e对应的key都匹配目标元素时，则找到了，直接返回~
                     return e.val;
                 }
-            } else if(eh<0) {
+            }
+            // --------------------------------------------------------------------------------
+            // CASE2: eh < 0
+            // 条件成立：即，hash小于0 分2种情况，是树或者正在扩容,需要借助find方法寻找元素，find的寻找方式依据Node的不同子类有不同的实现方式:
+            // 情况一：eh=-1 是fwd结点 -> 说明当前table正在扩容，且当前查询的这个桶位的数据已经被迁移走了，需要借助fwd结点的内部方法find去查询
+            // 情况二：eh=-2 是TreeBin节点 -> 需要使用TreeBin 提供的find方法查询。
+            else if(eh < 0) {
                 return (p = e.find(h, key)) != null ? p.val : null;
             }
-            
-            while((e = e.next) != null) {
-                if(e.hash == h && ((ek = e.key) == key || (ek != null && key.equals(ek)))) {
+            // --------------------------------------------------------------------------------
+            // CASE3: 前提条件 -> CASE1和CASE2条件不满足！
+            // 说明是当前桶位已经形成链表的这种情况: 遍历整个链表寻找元素
+            while ((e = e.next) != null) {
+                if (e.hash == h && ((ek = e.key) == key || (ek != null && key.equals(ek)))) {
                     return e.val;
                 }
             }
@@ -967,6 +997,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      */
     // 移除拥有指定key的元素，并返回刚刚移除的元素的值
     public V remove(Object key) {
+        // 调用替换节点方法
         return replaceNode(key, null, null);
     }
     
@@ -1322,7 +1353,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * mappings of this Map.
      *
      * @param key               key with which the specified value is to be associated
-     * @param value             the value to use if absent
+     * @param bakValue          the value to use if absent
      * @param remappingFunction the function to recompute a value if present
      *
      * @return the new value associated with the specified key, or null if none
@@ -3265,7 +3296,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
     // 如果为false，则当put数据时，遇到Map中有相同K,V的数据，则将其替换
     // 如果为true，则当put数据时，遇到Map中有相同K,V的数据，则不做替换，不插入
     final V putVal(K key, V value, boolean onlyIfAbsent) {
-        // 控制k 和 v 不能为null
+        // 控制 k 和 v 不能为null
         if (key == null || value == null) {
             throw new NullPointerException();
         }
@@ -3307,7 +3338,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
                 Node<K, V> node = new Node<>(hash, key, value);
                 
                 // 原子地更新tab[i]为node
-                if(casTabAt(tab, i, null, node)) {
+                if (casTabAt(tab, i, null, node)) {
                     // 跳出外循环
                     break;                   // no lock when adding to empty bin
                 }
@@ -3347,6 +3378,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
                         // 如果条件成立，说明当前桶位就是普通链表桶位,这里回顾下常量属性字段：
                         // static final int MOVED = -1; 表示当前节点是FWD(forwarding)节点
                         // static final int TREEBIN = -2; 表示当前节点已经树化
+                        // static final int RESERVED = -3; 表示当前节点为占位节点
                         if (fh >= 0) {
                             // 1.当前插入key与链表当中所有元素的key都不一致时，当前的插入操作是追加到链表的末尾，binCount此时表示链表长度
                             // 2.当前插入key与链表当中的某个元素的key一致时，当前插入操作可能就是替换了。binCount表示冲突位置（binCount - 1）
@@ -3387,7 +3419,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
                                 Node<K, V> pred = e;
                                 e = e.next;
                                 // 无法找到同位元素的话，说明需要在哈希槽(链)末尾新增元素
-                                if (e==null) {
+                                if (e == null) {
                                     pred.next = new Node<K, V>(hash, key, value);
                                     // 跳出内循环
                                     break;
@@ -3414,7 +3446,8 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
                                 }
                             }
                         }
-
+                        // 解决 computeIfAbsent bug
+                        // @see http://gee.cs.oswego.edu/cgi-bin/viewcvs.cgi/jsr166/src/main/java/util/concurrent/ConcurrentHashMap.java?r1=1.258&r2=1.259&sortby=date&diff_format=f
                         else if (f instanceof ReservationNode) {
                             throw new IllegalStateException("Recursive update");
                         }
@@ -3462,118 +3495,209 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * 　　　　如果newValue不为空，用新值覆盖旧值
      * 　　　　如果newValue为null，移除旧值
      */
+    /**
+     * 结点替换：
+     * 参数1：Object key -> 就表示当前结点的key
+     * 参数2：V value -> 要替换的目标值
+     * 参数3：Object cv（compare Value） ->
+     * 			如果cv不为null，则需要既比对key，还要比对cv，这样个参数都一致，才能替换成目标值
+     */
     final V replaceNode(Object key, V newValue, Object cv) {
+        // 计算key经过扰动运算后得到的hash
         int hash = spread(key.hashCode());
         
         Node<K,V>[] tab = table;
-        
+        // 自旋
         for(; ; ) {
+            // f表示桶位头结点
+            // n表示当前table数组长度
+            // i表示hash命中桶位下标
+            // fh表示桶位头结点hash
             Node<K,V> f; int n, i, fh;
-            
-            // 如果指定的哈希槽处没有结点可以处理
-            if (tab == null || (n = tab.length) == 0 || (f = tabAt(tab, i = (n - 1) & hash)) == null) {
+
+            // ----------------------------------------------------------------------------
+            // CASE1：
+            // 条件一：tab == null
+            //					true -> 表示当前map.table尚未初始化..
+            //					false -> 表示当前map.table已经初始化
+            // 条件二：(n = tab.length) == 0
+            //					true -> 表示当前map.table尚未初始化..
+            //					false -> 已经初始化
+            // 条件三：(f = tabAt(tab, i = (n - 1) & hash)) == null
+            //					true -> 表示命中桶位中为null，直接break
+            if (tab == null
+                    || (n = tab.length) == 0
+                    || (f = tabAt(tab, i = (n - 1) & hash)) == null) {
+                // 如果目标key所在的桶不存在，跳出循环返回null
                 break;
-                
-                // 正在扩容中
-            } else if ((fh = f.hash) == MOVED) {
+            }
+            // ----------------------------------------------------------------------------
+            // CASE2：
+            // 前置条件CASE2 ~ CASE3：当前桶位不是null
+            // 条件成立：fwd结点，说明当前table正在扩容中，当前是个写操作，所以当前线程需要协助table完成扩容。
+            else if ((fh = f.hash) == MOVED) {
+                // 如果正在扩容中，则协助扩容
                 tab = helpTransfer(tab, f);
-            } else {
+            }
+            // ----------------------------------------------------------------------------
+            // CASE3:
+            // 前置条件CASE2 ~ CASE3：当前桶位不是null
+            // 当前桶位是一个有数据的桶位，桶中可能是 "链表"也可能是"红黑树"TreeBin
+            else {
+                // 保留替换之前的数据引用
                 V oldVal = null;
                 
                 // 是否处理过结点
+                // 校验标记,在下面的CASEn中的if判断使用：标记是否处理过
                 boolean validated = false;
-                
+                // 加锁当前桶位头结点，加锁成功之后会进入代码块。
                 synchronized (f) {
-                    // 双重检查
+                    // 判断sync加锁是否为当前桶位头节点，防止其它线程，在当前线程加锁成功之前，修改过桶位 的头结点，导致锁错对象！
+
+                    // --------------------------------------------------------------------
+                    // CASE4:  tabAt(tab, i) == f 再次验证当前桶第一个元素是否被修改过
+                    // 条件成立：说明当前桶位头结点仍然为f，其它线程没修改过！
                     if (tabAt(tab, i) == f) {
-                        // 处理普通结点
+                        // --------------------------------------------------------------------
+                        // CASE5:  fh >= 0
+                        // 条件成立：说明桶位为链表或者单个node
                         if (fh >= 0) {
+                            // 校验标记置为true
                             validated = true;
-                            
-                            // 初始化为哈希槽上首个结点
+
+                            // e 表示当前循环处理结点
+                            // pred 表示当前循环节点的上一个节点
                             Node<K,V> e = f;
-                            
                             Node<K,V> pred = null;
-                            
+                            // 遍历链表寻找目标节点
                             while(true) {
+                                // 表示当前节点key
                                 K ek;
-                                
-                                // 如果找到了同位元素
+
+                                // ------------------------------------------------------------
+                                // CASE6:
+                                // 条件一：e.hash == hash
+                                //			true->说明当前节点的hash与查找节点hash一致
+                                // 条件二：((ek = e.key) == key || (ek != null && key.equals(ek)))
+                                // CASE6的if条件成立，说明key 与查询的key完全一致。
                                 if (e.hash == hash && ((ek = e.key) == key || (ek != null && key.equals(ek)))) {
-                                    // 旧值
+                                    // 找到了目标节点：当前节点的value，
                                     V ev = e.val;
-                                    
+                                    // -----------------------------------------------------
+                                    // CASE7:  检查目标节点旧value是否等于cv
+                                    // 条件一：cv == null
+                                    //			true -> 替换的值为null那么就是一个删除操作
+                                    // 条件二：cv == ev || (ev != null && cv.equals(ev))
+                                    //			true -> 那么是一个替换操作
                                     if (cv == null || cv == ev || (ev != null && cv.equals(ev))) {
+                                        // 删除 或者 替换
+                                        // 将当前节点的值 赋值给 oldVal 后续返回会用到~
                                         oldVal = ev;
-                                        
+                                        // 目标value不等于null
+                                        // 如果条件成立：说明当前是一个替换操作
                                         if (newValue != null) {
                                             // 覆盖旧值
                                             e.val = newValue;
-                                            
-                                            // 如果newValue为null，需要进一步判断
-                                        } else {
-                                            // 如果pred为null，说明需要移除哈希槽上首个结点
-                                            if(pred == null) {
+                                        }
+                                        // 删除操作
+                                        else {
+                                            // 如果前置节点不为空，删除当前节点：
+                                            // 让当前节点的上一个节点，指向当前节点的下一个节点。
+                                            if (pred == null) {
                                                 // 设置tab[i]为e.next
                                                 setTabAt(tab, i, e.next);
-                                            } else {
-                                                // 移除旧结点
+                                            }
+                                            // 条件成里：说明当前节点即为头结点
+                                            else {
+                                                // 如果前置节点为空，说明是桶中第一个元素，删除之：
+                                                // 只需要将桶位设置为头结点的下一个节点。
                                                 pred.next = e.next;
                                             }
                                         }
                                     }
-                                    
                                     break;
                                 }
                                 
                                 pred = e;
-                                
+                                // 遍历到链表尾部还没找到元素，跳出循环
                                 if ((e = e.next) == null) {
                                     break;
                                 }
                             }// while(true)
-                            
-                            // 处理红黑树
-                        } else if (f instanceof TreeBin) {
+                        }
+                        // --------------------------------------------------------------------
+                        // CASE8:  f instanceof TreeBin
+                        // 条件成立：TreeBin节点。
+                        else if (f instanceof TreeBin) {
+                            // 校验标记置为true
                             validated = true;
-                            
+                            // 转换为实际类型 TreeBin t
                             TreeBin<K,V> t = (TreeBin<K,V>)f;
+                            // r 表示 红黑树根节点
+                            // p 表示 红黑树中查找到对应key 一致的node
                             TreeNode<K,V> r, p;
-                            
+
+                            // 遍历树找到了目标节点：
+                            // 条件一：(r = t.root) != null 理论上是成立
+                            // 条件二：TreeNode.findTreeNode 以当前节点为入口，向下查找key（包括本身节点）
+                            //        true->说明查找到相应key 对应的node节点，会赋值给p
                             if ((r = t.root) != null &&
                                 (p = r.findTreeNode(hash, key, null)) != null) {
+                                // 保存p.val 到pv
                                 V pv = p.val;
-                                if (cv == null || cv == pv || (pv != null && cv.equals(pv))) { oldVal = pv;
+                                // 检查目标节点旧value是否等于cv：
+                                // 条件一：cv == null 成立：不必对比value，就做替换或者删除操作
+                                // 条件二：cv == pv ||(pv != null && cv.equals(pv)) 成立：说明“对比值”与当前p节点的值 一致
+                                if (cv == null
+                                        || cv == pv
+                                        || (pv != null && cv.equals(pv))) {
+                                    // 替换或者删除操作
+                                    oldVal = pv;
+                                    // 如果value不为空则替换旧值
+                                    // 条件成立：替换操作
                                     if (newValue != null) {
                                         p.val = newValue;
-                                    } else if (t.removeTreeNode(p)) {
+                                    }
+                                    // 如果value为空则删除元素
+                                    // 删除操作
+                                    else if (t.removeTreeNode(p)) {
                                         Node<K, V> x = untreeify(t.first);
-                                        // 设置tab[i]为x
+                                        // 如果删除后树的元素个数较少则退化成链表
+                                        // t.removeTreeNode(p)这个方法返回true表示删除节点后树的元素个数较少
                                         setTabAt(tab, i, x);
                                     }
                                 }
                             }
-                        } else if (f instanceof ReservationNode) {
+                        }
+                        // --------------------------------------------------------------------
+                        // CASE9:  f instanceof ReservationNode
+                        // 条件成立：说明桶位为占位节点
+                        else if (f instanceof ReservationNode) {
                             throw new IllegalStateException("Recursive update");
                         }
+
                     }
                 }// synchronized
                 
                 // 如果处理过结点，则需要进一步验证
+                // ----------------------------------------------------------------------------
+                // CASEn: 如果处理过，不管有没有找到元素都返回
+                // 当其他线程修改过桶位头结点时，当前线程 sync 头结点 锁错对象时，validated 为false，会进入下次for自旋:
                 if (validated) {
+                    // 如果找到了元素，返回其旧值
                     if (oldVal != null) {
+                        // 替换的值 为null，说明当前是一次删除操作，oldVal ！=null 成立，说明删除成功，更新当前元素个数计数器。
+                        // 如果要替换的值为空，元素个数减1
                         if (newValue == null) {
                             addCount(-1L, -1);
                         }
-                        
                         return oldVal;
                     }
-                    
                     break;
                 }
             }
-        }// for(; ; )
-        
+        } // for(; ; )
+        // 没找到元素返回空
         return null;
     }
     
@@ -3744,6 +3868,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
             // 根据前表的长度 tab.length 去获取扩容唯一标识戳，
             // 假设 16 -> 32 扩容：1000 0000 0001 1011
             int rs = resizeStamp(tab.length);
+            // int rs = resizeStamp(tab.length) << RESIZE_STAMP_SHIFT;
 
             // 条件一：nextTab == nextTable
             // 成立：表示当前扩容正在进行中
@@ -3963,6 +4088,12 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
                 // 什么意思呢？
                 // 即，所有将map容量由16扩容到32的线程，其拿到的扩容唯一标识戳都是1000 0000 0001 1011
                 int rs = resizeStamp(n);
+                // JDK16 最新的版本：resizeStamp 计算出来扩容标志戳
+                // 00000000 00000000 1000 0000 0001 1011
+                // resizeStamp(n) << RESIZE_STAMP_SHIFT = 1000 0000 0001 1011 00000000 00000000
+                // rs = 10000000 00011011 00000000 00000000
+                // int rs = resizeStamp(n) << RESIZE_STAMP_SHIFT;
+
 
                 // --------------------------------------------------------------------------
                 // CASE4:
@@ -3980,7 +4111,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
                     // sc == (rs << 16) + MAX_RESIZERS
                     //        true-> 表示当前参与并发扩容的线程达到了最大值 65535 - 1
                     //        false->表示当前线程可以参与进来
-                    //条件四：(nt = nextTable) == null
+                    // 条件四：(nt = nextTable) == null
                     //        true -> 表示本次扩容结束
                     //        false -> 扩容正在进行中
                     if ((sc >>> RESIZE_STAMP_SHIFT) != rs
@@ -4319,6 +4450,9 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
                                 int ph = p.hash;
                                 K pk = p.key;
                                 V pv = p.val;
+                                // ph & n == 0 这个就是为什么扩容必须要2的倍数原因之一了
+                                // n 是老表的大小，假设为 16 == 10000
+                                // 那么与操作之后的效果要么就是 0 要么就是非 0了
                                 if ((ph & n) == 0) {
                                     ln = new Node<K, V>(ph, pk, pv, ln);
                                 } else {
@@ -4546,29 +4680,40 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
      * hash：某元素的哈希值
      */
     private final void treeifyBin(Node<K, V>[] tab, int index) {
-        if(tab == null) {
+        if (tab == null) {
             return;
         }
-        
+        // b：
+        // n: tab的长度
+        // sc: sizeCtl
         Node<K, V> b;
         int n;
-        
+
         // 哈希数组的容量还未达到形成一棵红黑树的最低要求
-        if((n = tab.length)<MIN_TREEIFY_CAPACITY) {
+        // ---------------------------------------------------------------------------
+        // CASE1:
+        // 条件成立：说明当前table数组长度未达到 64，此时不进行树化操作，而进行扩容操作。
+        if ((n = tab.length)<MIN_TREEIFY_CAPACITY) {
             // 尝试调整哈希数组的大小，以容纳指定数量的元素（默认增加一倍）
+            // table进行扩容
             tryPresize(n << 1);
-            
-            // 满足从链表转换为红黑树的要求，则将链表转换为红黑树
-        } else {
+        }
+        // ---------------------------------------------------------------------------
+        // CASE2:
+        // 条件成立：说明当前桶位有数据，且是普通node数据。
+        else {
             // 获取tab[index]
             b = tabAt(tab, index);
-            if(b == null || b.hash<0) {
+            if (b == null || b.hash < 0) {
                 return;
             }
-            
+            // 给头元素b加锁
             synchronized(b) {
                 // 双重检查机制
-                if(tabAt(tab, index) == b) {
+                // 条件成立：表示加锁没问题，b没有被其他线程修改过
+                if (tabAt(tab, index) == b) {
+                    // 下面的for循环逻辑，目的就是把桶位中的单链表转换成双向链表，便于树化~
+                    // hd指向双向列表的头部，tl指向双向链表的尾部
                     TreeNode<K, V> hd = null, tl = null;
                     
                     // 1.首先，将所有普通结点“转换”为红黑树结点并串联起来
@@ -4742,7 +4887,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
          */
         // 根据给定的key和hash（由key计算而来）查找对应的（同位）元素，如果找不到，则返回null
         final TreeNode<K, V> findTreeNode(int h, Object k, Class<?> kc) {
-            if(k != null) {
+            if (k != null) {
                 TreeNode<K, V> p = this;
                 
                 do {
@@ -4750,11 +4895,15 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
                     K pk;
                     TreeNode<K, V> q;
                     TreeNode<K, V> pl = p.left, pr = p.right;
-                    if((ph = p.hash)>h) {
+                    if ((ph = p.hash)>h) {
                         p = pl;
-                    } else if(ph<h) {
+                    }
+
+                    else if (ph<h) {
                         p = pr;
-                    } else if((pk = p.key) == k || (pk != null && k.equals(pk))) {
+                    }
+
+                    else if ((pk = p.key) == k || (pk != null && k.equals(pk))) {
                         return p;
                     } else if(pl == null) {
                         p = pr;
@@ -4767,7 +4916,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
                     } else {
                         p = pl;
                     }
-                } while(p != null);
+                } while (p != null);
             }
             
             return null;
@@ -4785,16 +4934,22 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
     // 红黑树(红黑树代理结点)
     static final class TreeBin<K, V> extends Node<K, V> {
         // values for lockState
-        static final int WRITER = 1; // set while holding write lock
-        static final int WAITER = 2; // set when waiting for write lock
-        static final int READER = 4; // increment value for setting read lock
-        
+        static final int WRITER = 1; // set while holding write lock 写锁状态
+        static final int WAITER = 2; // set when waiting for write lock 等待者状态（写线程在等待）
+        static final int READER = 4; // increment value for setting read lock 读锁状态
+
+        // 链表的头节点
         volatile TreeNode<K, V> first;
-        
+        // 红黑树根节点
         TreeNode<K, V> root;
         
         volatile Thread waiter;
-        
+        /**
+         * 锁的状态：
+         * 1.写锁状态 写是独占状态，以散列表来看，真正进入到TreeBin中的写线程 同一时刻只能有一个线程。
+         * 2.读锁状态 读锁是共享，同一时刻可以有多个线程 同时进入到 TreeBin对象中获取数据。 每一个线程 都会给 lockStat + 4
+         * 3.等待者状态（写线程在等待），当TreeBin中有读线程目前正在读取数据时，写线程无法修改数据，那么就将lockState的最低2位设置为 0b 10 ：即，换算成十进制就是WAITER = 2;
+         */
         volatile int lockState;
         
         private static final Unsafe U = Unsafe.getUnsafe();
@@ -4807,63 +4962,97 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
          */
         // 创建红黑树，即把所有红黑树结点安置在树中合适的位置上
         TreeBin(TreeNode<K, V> n) {
+            // 设置当前节点hash为-2 表示此节点是TreeBin节点
             super(TREEBIN, null, null);
-            
+            // 使用first 引用 treeNode链表
             this.first = n;
-            
+            // r 红黑树的根节点引用
             TreeNode<K, V> r = null;
             TreeNode<K, V> x = n;
             TreeNode<K, V> next;
-            
-            while(x != null) {
+            // x表示遍历的当前节点
+            while (x != null) {
                 next = (TreeNode<K, V>) x.next;
+                // 强制设置当前插入节点的左右子树为null
                 x.left = x.right = null;
-                if(r == null) {
+                // ----------------------------------------------------------------------
+                // CASE1：
+                // 条件成立：说明当前红黑树是一个空树，那么设置插入元素为根节点
+                // 第一次循环，r一定是null
+                if (r == null) {
+                    // 根节点的父节点 一定为 null
                     x.parent = null;
+                    // 颜色改为黑色
                     x.red = false;
+                    // 让r引用x所指向的对象。
                     r = x;
-                } else {
+                }
+                // ----------------------------------------------------------------------
+                // CASE2：r != null
+                else {
+                    // 非第一次循环，都会来带else分支，此时红黑树根节点已经有数据了
+                    // k 表示 插入节点的key
                     K k = x.key;
+                    // h 表示 插入节点的hash
                     int h = x.hash;
+                    // kc 表示 插入节点key的class类型
                     Class<?> kc = null;
+                    // p 表示 为查找插入节点的父节点的一个临时节点
                     TreeNode<K, V> p = r;
-                    
-                    while(true) {
+                    // 这里的for循环，就是一个查找并插入的过程
+                    while (true) {
+                        // dir (-1, 1)
+                        // -1 表示插入节点的hash值大于 当前p节点的hash
+                        // 1 表示插入节点的hash值 小于 当前p节点的hash
+                        // ph p表示 为查找插入节点的父节点的一个临时节点的hash
                         int dir, ph;
-                        
+                        // 临时节点 key
                         K pk = p.key;
-                        
-                        if((ph = p.hash)>h) {
+                        // 插入节点的hash值 小于 当前节点
+                        if ((ph = p.hash) > h) {
+                            // 插入节点可能需要插入到当前节点的左子节点 或者 继续在左子树上查找
                             dir = -1;
-                        } else if(ph<h) {
+                        }
+                        // 插入节点的hash值 大于 当前节点
+                        else if (ph < h) {
+                            // 插入节点可能需要插入到当前节点的右子节点 或者 继续在右子树上查找
                             dir = 1;
-                        } else if((kc == null && (kc = comparableClassFor(k)) == null) || (dir = compareComparables(kc, k, pk)) == 0) {
+                        }
+                        // 如果执行到 CASE3，说明当前插入节点的hash 与 当前节点的hash一致，会在case3 做出最终排序。最终
+                        // 拿到的dir 一定不是0，（-1， 1）
+                        else if ((kc == null
+                                && (kc = comparableClassFor(k)) == null)
+                                || (dir = compareComparables(kc, k, pk)) == 0) {
                             dir = tieBreakOrder(k, pk);
                         }
-                        
+
+                        // xp 想要表示的是 插入节点的 父节点
                         TreeNode<K, V> xp = p;
-                        
-                        if((p = (dir<=0) ? p.left : p.right) == null) {
+                        // 条件成立：说明当前p节点 即为插入节点的父节点
+                        // 条件不成立：说明p节点 底下还有层次，需要将p指向 p的左子节点 或者 右子节点，表示继续向下搜索。
+                        if ((p = (dir<=0) ? p.left : p.right) == null) {
+                            // 设置插入节点的父节点 为 当前节点
                             x.parent = xp;
-                            
-                            if(dir<=0) {
+                            // 小于P节点，需要插入到P节点的左子节点
+                            if (dir <= 0) {
                                 xp.left = x;
-                            } else {
+                                // 大于P节点，需要插入到P节点的右子节点
+                            }
+
+                            else {
                                 xp.right = x;
                             }
-                            
+                            // 插入节点后，红黑树性质 可能会被破坏，所以需要调用 平衡方法
                             r = balanceInsertion(r, x);
                             
                             break;
                         }
                     }// while(true)
                 }
-                
                 x = next;
             }
-            
+            // 将r 赋值给 TreeBin对象的 root引用。
             this.root = r;
-            
             assert checkInvariants(root);
         }
         
@@ -5091,14 +5280,16 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
             TreeNode<K, V> xp, xpp, xppl, xppr;
             
             while(true) {
-                if((xp = x.parent) == null) {
+                if ((xp = x.parent) == null) {
                     x.red = false;
                     return x;
-                } else if(!xp.red || (xpp = xp.parent) == null) {
+                }
+
+                else if (!xp.red || (xpp = xp.parent) == null) {
                     return root;
                 }
                 
-                if(xp == (xppl = xpp.left)) {
+                if (xp == (xppl = xpp.left)) {
                     if((xppr = xpp.right) != null && xppr.red) {
                         xppr.red = false;
                         xp.red = false;
@@ -5119,18 +5310,18 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
                         }
                     }
                 } else {
-                    if(xppl != null && xppl.red) {
+                    if (xppl != null && xppl.red) {
                         xppl.red = false;
                         xp.red = false;
                         xpp.red = true;
                         x = xpp;
                     } else {
-                        if(x == xp.left) {
+                        if (x == xp.left) {
                             root = rotateRight(root, x = xp);
                             xpp = (xp = x.parent) == null ? null : xp.parent;
                         }
                         
-                        if(xp != null) {
+                        if (xp != null) {
                             xp.red = false;
                             if(xpp != null) {
                                 xpp.red = true;
@@ -5147,32 +5338,40 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
             TreeNode<K, V> xp, xpl, xpr;
             
             while(true) {
-                if(x == null || x == root) {
+                if (x == null || x == root) {
                     return root;
-                } else if((xp = x.parent) == null) {
+                }
+
+                else if ((xp = x.parent) == null) {
                     x.red = false;
                     return x;
-                } else if(x.red) {
+                }
+
+                else if (x.red) {
                     x.red = false;
                     return root;
-                } else if((xpl = xp.left) == x) {
-                    if((xpr = xp.right) != null && xpr.red) {
+                }
+
+                else if ((xpl = xp.left) == x) {
+                    if ((xpr = xp.right) != null && xpr.red) {
                         xpr.red = false;
                         xp.red = true;
                         root = rotateLeft(root, xp);
                         xpr = (xp = x.parent) == null ? null : xp.right;
                     }
                     
-                    if(xpr == null) {
+                    if (xpr == null) {
                         x = xp;
                     } else {
                         TreeNode<K, V> sl = xpr.left, sr = xpr.right;
-                        if((sr == null || !sr.red) && (sl == null || !sl.red)) {
+                        if ((sr == null || !sr.red) && (sl == null || !sl.red)) {
                             xpr.red = true;
                             x = xp;
-                        } else {
-                            if(sr == null || !sr.red) {
-                                if(sl != null) {
+                        }
+
+                        else {
+                            if (sr == null || !sr.red) {
+                                if (sl != null) {
                                     sl.red = false;
                                 }
                                 xpr.red = true;
@@ -5180,14 +5379,14 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
                                 xpr = (xp = x.parent) == null ? null : xp.right;
                             }
                             
-                            if(xpr != null) {
+                            if (xpr != null) {
                                 xpr.red = (xp != null) && xp.red;
-                                if((sr = xpr.right) != null) {
+                                if ((sr = xpr.right) != null) {
                                     sr.red = false;
                                 }
                             }
                             
-                            if(xp != null) {
+                            if (xp != null) {
                                 xp.red = false;
                                 root = rotateLeft(root, xp);
                             }
@@ -5195,17 +5394,21 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
                             x = root;
                         }
                     }
-                } else { // symmetric
-                    if(xpl != null && xpl.red) {
+                }
+
+                else { // symmetric
+                    if (xpl != null && xpl.red) {
                         xpl.red = false;
                         xp.red = true;
                         root = rotateRight(root, xp);
                         xpl = (xp = x.parent) == null ? null : xp.left;
                     }
                     
-                    if(xpl == null) {
+                    if (xpl == null) {
                         x = xp;
-                    } else {
+                    }
+
+                    else {
                         TreeNode<K, V> sl = xpl.left, sr = xpl.right;
                         if((sl == null || !sl.red) && (sr == null || !sr.red)) {
                             xpl.red = true;
@@ -5243,18 +5446,23 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
         static <K, V> TreeNode<K, V> rotateLeft(TreeNode<K, V> root, TreeNode<K, V> p) {
             TreeNode<K, V> r, pp, rl;
             
-            if(p != null && (r = p.right) != null) {
-                if((rl = p.right = r.left) != null) {
+            if (p != null && (r = p.right) != null) {
+                if ((rl = p.right = r.left) != null) {
                     rl.parent = p;
                 }
                 
-                if((pp = r.parent = p.parent) == null) {
+                if ((pp = r.parent = p.parent) == null) {
                     (root = r).red = false;
-                } else if(pp.left == p) {
+                }
+
+                else if(pp.left == p) {
                     pp.left = r;
-                } else {
+                }
+
+                else {
                     pp.right = r;
                 }
+
                 r.left = p;
                 p.parent = r;
             }
@@ -5266,16 +5474,20 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
         static <K, V> TreeNode<K, V> rotateRight(TreeNode<K, V> root, TreeNode<K, V> p) {
             TreeNode<K, V> l, pp, lr;
             
-            if(p != null && (l = p.left) != null) {
-                if((lr = p.left = l.right) != null) {
+            if (p != null && (l = p.left) != null) {
+                if ((lr = p.left = l.right) != null) {
                     lr.parent = p;
                 }
                 
-                if((pp = l.parent = p.parent) == null) {
+                if ((pp = l.parent = p.parent) == null) {
                     (root = l).red = false;
-                } else if(pp.right == p) {
+                }
+
+                else if(pp.right == p) {
                     pp.right = l;
-                } else {
+                }
+
+                else {
                     pp.left = l;
                 }
                 
@@ -5317,23 +5529,42 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
          */
         // 根据给定的key和hash（由key计算而来）查找对应的（同位）元素，如果找不到，则返回null
         final Node<K, V> find(int hash, Object k) {
-            if(k != null) {
-                for(Node<K, V> e = first; e != null; ) {
+            if (k != null) {
+                // e 表示循环迭代的当前节点：迭代的是first引用的链表
+                for (Node<K, V> e = first; e != null; ) {
+                    // s 保存的是lock临时状态
+                    // ek 链表当前节点 的key
                     int s;
                     K ek;
-                    
-                    if(((s = lockState) & (WAITER | WRITER)) != 0) {
-                        if(e.hash == hash && ((ek = e.key) == k || (ek != null && k.equals(ek)))) {
+                    // ----------------------------------------------------------------------
+                    // CASE1：
+                    // (WAITER|WRITER) => 0010 | 0001 => 0011
+                    // lockState & 0011 != 0 条件成立：说明当前TreeBin有等待者线程 或者 目前有写操作线程正在加锁
+                    if (((s = lockState) & (WAITER | WRITER)) != 0) {
+                        if (e.hash == hash && ((ek = e.key) == k || (ek != null && k.equals(ek)))) {
                             return e;
                         }
                         e = e.next;
-                    } else if(U.compareAndSetInt(this, LOCKSTATE, s, s + READER)) {
+                    }
+                    // ----------------------------------------------------------------------
+                    // CASE2：
+                    // 前置条件：当前TreeBin中 等待者线程 或者 写线程 都没有
+                    // 条件成立：说明添加读锁成功
+                    else if(U.compareAndSetInt(this, LOCKSTATE, s, s + READER)) {
                         TreeNode<K, V> r, p;
                         try {
+                            // 查询操作
                             p = ((r = root) == null ? null : r.findTreeNode(hash, k, null));
                         } finally {
+                            // w 表示等待者线程
                             Thread w;
-                            if(U.getAndAddInt(this, LOCKSTATE, -READER) == (READER | WAITER) && (w = waiter) != null) {
+                            // U.getAndAddInt(this, LOCKSTATE, -READER) == (READER|WAITER)
+                            // 1.当前线程查询红黑树结束，释放当前线程的读锁 就是让 lockstate 值 - 4
+                            // (READER|WAITER) = 0110 => 表示当前只有一个线程在读，且“有一个线程在等待”
+                            // 当前读线程为 TreeBin中的最后一个读线程。
+
+                            // 2.(w = waiter) != null 说明有一个写线程在等待读操作全部结束。
+                            if (U.getAndAddInt(this, LOCKSTATE, -READER) == (READER | WAITER) && (w = waiter) != null) {
                                 LockSupport.unpark(w);
                             }
                         }
@@ -5346,17 +5577,21 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
         
         /**
          * Acquires write lock for tree restructuring.
+         * 加锁：基于CAS的方式更新LOCKSTATE的值，期望值是0，更新值是WRITER（1，写锁）
          */
         private final void lockRoot() {
             if(!U.compareAndSetInt(this, LOCKSTATE, 0, WRITER)) {
+                // 条件成立：说明lockState 并不是 0，说明此时有其它读线程在treeBin红黑树中读取数据。
                 contendedLock(); // offload to separate method
             }
         }
         
         /**
          * Releases write lock for tree restructuring.
+         * 释放锁
          */
         private final void unlockRoot() {
+            // lockstate置为0
             lockState = 0;
         }
         
@@ -5365,20 +5600,33 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
          */
         private final void contendedLock() {
             boolean waiting = false;
+            // s表示lock值
             for(int s; ; ) {
-                if(((s = lockState) & ~WAITER) == 0) {
-                    if(U.compareAndSetInt(this, LOCKSTATE, s, WRITER)) {
-                        if(waiting) {
+                // ~WAITER = 11111....01
+                // 条件成立：说明目前TreeBin中没有读线程在访问 红黑树
+                // 条件不成立：有线程在访问红黑树
+                if (((s = lockState) & ~WAITER) == 0) {
+                    // 条件成立：说明写线程 抢占锁成功
+                    if (U.compareAndSetInt(this, LOCKSTATE, s, WRITER)) {
+                        if (waiting) {
+                            // 设置TreeBin对象waiter 引用为null
                             waiter = null;
                         }
                         return;
                     }
-                } else if((s & WAITER) == 0) {
-                    if(U.compareAndSetInt(this, LOCKSTATE, s, s | WAITER)) {
+                }
+
+                // lock & 0000...10 = 0, 条件成立：说明lock 中 waiter 标志位 为0，此时当前线程可以设置为1了，然后将当前线程挂起。
+                else if((s & WAITER) == 0) {
+                    if (U.compareAndSetInt(this, LOCKSTATE, s, s | WAITER)) {
                         waiting = true;
                         waiter = Thread.currentThread();
                     }
-                } else if(waiting) {
+                }
+
+                // 条件成立：说明当前线程在CASE2中已经将 treeBin.waiter 设置为了当前线程，并且将lockState 中表示 等待者标记位的地方 设置为了1
+                // 这个时候，就让当前线程 挂起。。
+                else if (waiting) {
                     LockSupport.park(this);
                 }
             }
@@ -5441,32 +5689,62 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
         Node<K, V> find(int h, Object k) {
             // loop to avoid arbitrarily deep recursion on forwarding nodes
 outer:
-            for(Node<K, V>[] tab = nextTable; ; ) {
+            for (Node<K, V>[] tab = nextTable; ; ) {
+                // n 表示为扩容而创建的新表的长度
+                // e 表示在扩容而创建新表时，使用寻址算法得到的桶位头结点
                 Node<K, V> e;
                 int n;
-                
-                if(k == null || tab == null || (n = tab.length) == 0 || (e = tabAt(tab, (n - 1) & h)) == null) {
+                // 条件一：永远不成立
+                // 条件二：永远不成立
+                // 条件三：永远不成立
+                // 条件四：在新扩容表中重新路由定位 hash 对应的头结点
+                //        true ->  1.在oldTable中对应的桶位在迁移之前就是null
+                //        false -> 2.扩容完成后，有其它写线程，将此桶位设置为了null
+                if (k == null
+                        || tab == null
+                        || (n = tab.length) == 0
+                        || (e = tabAt(tab, (n - 1) & h)) == null) {
                     return null;
                 }
-                
+                // ---------------------------------------------------------------------------
+                // 自旋2
+                // 前置条件：扩容后的表对应hash的桶位一定不是null，e为此桶位的头结点
+                // e可能为哪些node类型？
+                //		1.node 类型
+                //		2.TreeBin 类型
+                //		3.FWD类型
                 for(; ; ) {
+                    // eh 新扩容后表指定桶位的当前节点的hash
+                    // ek 新扩容后表指定桶位的当前节点的key
                     int eh;
                     K ek;
-                    
-                    if((eh = e.hash) == h && ((ek = e.key) == k || (ek != null && k.equals(ek)))) {
+                    // CASE1条件成立：说明新扩容后的表，当前命中桶位中的数据，即为查询想要数据。
+                    if ((eh = e.hash) == h
+                            && ((ek = e.key) == k || (ek != null && k.equals(ek)))) {
                         return e;
                     }
-                    
-                    if(eh<0) {
-                        if(e instanceof ForwardingNode) {
+                    // CASE2: eh < 0 时
+                    // 1.TreeBin 类型
+                    // 2.FWD类型（新扩容的表，在并发很大的情况下，可能在此方法再次拿到FWD类型），即可能又发生了扩容
+                    if (eh < 0) {
+                        // 判断是否是FWD结点
+                        if (e instanceof ForwardingNode) {
+                            // 是FWD结点
                             tab = ((ForwardingNode<K, V>) e).nextTable;
+                            // 跳转到自旋1
                             continue outer;
-                        } else {
+                        }
+                        // 不是FWD结点
+                        // 说明此桶位 为 TreeBin 节点，使用TreeBin.find 查找红黑树中相应节点。
+                        else {
                             return e.find(h, k);
                         }
                     }
-                    
-                    if((e = e.next) == null) {
+                    // 前置条件：当前桶位头结点 并没有命中查询，说明此桶位是链表
+                    // 1.将当前元素指向链表的下一个元素
+                    // 2.判断当前元素的下一个位置是否为空
+                    //   	true -> 说明迭代到链表末尾，未找到对应的数据，返回Null
+                    if ((e = e.next) == null) {
                         return null;
                     }
                 }
